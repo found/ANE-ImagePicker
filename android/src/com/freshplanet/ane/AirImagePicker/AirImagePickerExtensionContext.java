@@ -22,12 +22,17 @@ package com.freshplanet.ane.AirImagePicker;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 import android.app.Activity;
+import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
@@ -35,10 +40,12 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Matrix;
+import android.hardware.Camera;
 import android.media.ExifInterface;
 import android.net.Uri;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.util.Log;
 
 import com.adobe.fre.FREBitmapData;
 import com.adobe.fre.FREByteArray;
@@ -58,12 +65,13 @@ import com.freshplanet.ane.AirImagePicker.functions.RemoveOverlayFunction;
 
 public class AirImagePickerExtensionContext extends FREContext 
 {
+	private static String TAG = "[AirImagePickerExtension]";
+	
 	@Override
 	public void dispose() 
 	{
 		AirImagePickerExtension.context = null;
 	}
-	
 	
 	//-----------------------------------------------------//
 	//					EXTENSION API					   //
@@ -102,9 +110,72 @@ public class AirImagePickerExtensionContext extends FREContext
 	
 	public Boolean isCameraAvailable()
 	{
+		Boolean hasFrontalCamera = false; 
 		Boolean hasCameraFeature = getActivity().getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA);
+		if (!hasCameraFeature)
+		{
+			// try to find a frontal camera
+			Camera camera = null;
+			
+			// Look for front-facing camera, using the Gingerbread API.
+		    // Java reflection is used for backwards compatibility with pre-Gingerbread APIs.
+			try {
+		        Class<?> cameraClass = Class.forName("android.hardware.Camera");
+		        Object cameraInfo = null;
+		        Field field = null;
+		        int cameraCount = 0;
+		        Method getNumberOfCamerasMethod = cameraClass.getMethod( "getNumberOfCameras" );
+		        if ( getNumberOfCamerasMethod != null ) 
+		        {
+		            cameraCount = (Integer) getNumberOfCamerasMethod.invoke( null, (Object[]) null );
+		        }
+		        Class<?> cameraInfoClass = Class.forName("android.hardware.Camera$CameraInfo");
+		        if ( cameraInfoClass != null ) 
+		        {
+		            cameraInfo = cameraInfoClass.newInstance();
+		        }
+		        if ( cameraInfo != null ) 
+		        {
+		            field = cameraInfo.getClass().getField( "facing" );
+		        }
+		        Method getCameraInfoMethod = cameraClass.getMethod( "getCameraInfo", Integer.TYPE, cameraInfoClass );
+		        if ( getCameraInfoMethod != null && cameraInfoClass != null && field != null ) 
+		        {
+		            for ( int camIdx = 0; camIdx < cameraCount; camIdx++ ) 
+		            {
+		                getCameraInfoMethod.invoke( null, camIdx, cameraInfo );
+		                int facing = field.getInt( cameraInfo );
+		                if ( facing == 1 ) // Camera.CameraInfo.CAMERA_FACING_FRONT 
+		                {  
+		                    try {
+		                        Method cameraOpenMethod = cameraClass.getMethod( "open", Integer.TYPE );
+		                        if ( cameraOpenMethod != null ) 
+		                        {
+		                            camera = (Camera) cameraOpenMethod.invoke( null, camIdx );
+		                        }
+		                    } 
+		                    catch (RuntimeException e) 
+		                    {
+		                        Log.e(TAG, "Camera failed to open: " + e.getLocalizedMessage());
+		                    }
+		                }
+		            }
+		        }
+		    }
+		    // Ignore the bevy of checked exceptions the Java Reflection API throws - if it fails, who cares.
+		    catch ( ClassNotFoundException e        ) {Log.e(TAG, "ClassNotFoundException" + e.getLocalizedMessage());}
+		    catch ( NoSuchMethodException e         ) {Log.e(TAG, "NoSuchMethodException" + e.getLocalizedMessage());}
+		    catch ( NoSuchFieldException e          ) {Log.e(TAG, "NoSuchFieldException" + e.getLocalizedMessage());}
+		    catch ( IllegalAccessException e        ) {Log.e(TAG, "IllegalAccessException" + e.getLocalizedMessage());}
+		    catch ( InvocationTargetException e     ) {Log.e(TAG, "InvocationTargetException" + e.getLocalizedMessage());}
+		    catch ( InstantiationException e        ) {Log.e(TAG, "InstantiationException" + e.getLocalizedMessage());}
+		    catch ( SecurityException e             ) {Log.e(TAG, "SecurityException" + e.getLocalizedMessage());}
+			
+			hasFrontalCamera = (camera != null);
+		}
 		
-		return hasCameraFeature && isActionAvailable(CAMERA_ACTION);
+		
+		return (hasCameraFeature || hasFrontalCamera) && isActionAvailable(CAMERA_ACTION);
 	}
 	
 	public void displayCamera(Boolean crop, String albumName)
